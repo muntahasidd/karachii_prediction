@@ -57,6 +57,4 @@ jobs:
 
           
           
-          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
-        run: |
-          python every5hr.py
+          
