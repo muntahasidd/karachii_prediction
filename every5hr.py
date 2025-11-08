@@ -18,8 +18,8 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 # ======= CONFIG =======
-os.environ["HOPSWORKS_API_KEY"] = "lfFwLUOhGfLXvEhH.YMimJy6BGMCztKnmFuq5MCZ1A79URh51YM8amIQJSUtOMw8R7p7YYN3cVUxErhZX"
-API_KEY = "6094f98aa9ad646bfcbdd49788573e5b"
+os.environ["HOPSWORKS_API_KEY"] = os.getenv("HOPSWORKS_API_KEY")
+OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
 LAT, LON = 24.8607, 67.0011
 CITY_ID = 1174872
 CSV_PATH = "karachi_weather_5h.csv"
