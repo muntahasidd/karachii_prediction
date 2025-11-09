@@ -1,5 +1,5 @@
 # ========================================
-# Karachi Weather & AQI Forecast - Auto Pipeline (5-hour Interval)
+# Karachi Weather & AQI Forecast - 5-hour Interval, Combined Historical + Recent Data
 # ========================================
 
 import requests, pandas as pd, numpy as np, time, os, sys
@@ -12,15 +12,15 @@ from sklearn.multioutput import MultiOutputRegressor
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-# ========== CONFIG ==========
-os.environ["HOPSWORKS_API_KEY"] = os.getenv("HOPSWORKS_API_KEY")  # ensure it's set in your environment
-API_KEY = os.getenv("OPENWEATHER_API_KEY")  # ensure your OpenWeather API key is also set
-
+# ======= CONFIG =======
+os.environ["HOPSWORKS_API_KEY"] = os.getenv("HOPSWORKS_API_KEY")
+API_KEY = os.getenv("OPENWEATHER_API_KEY")
 LAT, LON = 24.8607, 67.0011
 CITY_ID = 1174872
 CSV_PATH = "karachi_weather_5h.csv"
+FEATURE_STORE_NAME = "aqi_karachi_final"
 
-# ========== FETCH FUNCTIONS ==========
+# ======= FETCH FUNCTIONS =======
 def fetch_weather_at(ts):
     url = "http://history.openweathermap.org/data/2.5/history/city"
     params = {
@@ -33,7 +33,6 @@ def fetch_weather_at(ts):
     r = requests.get(url, params=params, timeout=30)
     return r.json()["list"][0] if r.status_code == 200 and r.json().get("list") else None
 
-
 def fetch_pollution_at(ts):
     url = "https://api.openweathermap.org/data/2.5/air_pollution/history"
     params = {
@@ -45,7 +44,6 @@ def fetch_pollution_at(ts):
     }
     r = requests.get(url, params=params, timeout=30)
     return r.json()["list"][0] if r.status_code == 200 and r.json().get("list") else None
-
 
 def build_record(ts):
     weather = fetch_weather_at(ts)
@@ -65,7 +63,7 @@ def build_record(ts):
         "wind_speed": weather["wind"]["speed"]
     }
 
-# ========== DATA COLLECTION ==========
+# ======= COLLECT NEW DATA =======
 def collect_data_5days_every5hours():
     start = datetime.now() - timedelta(days=5)
     end = datetime.now()
@@ -73,7 +71,7 @@ def collect_data_5days_every5hours():
     records = []
 
     while current < end:
-        print(f"📡 Fetching {current}")
+        print(f"Fetching {current}")
         rec = build_record(current)
         if rec:
             records.append(rec)
@@ -83,7 +81,7 @@ def collect_data_5days_every5hours():
     print(f"✅ Collected {len(df_new)} new records.")
     return df_new
 
-# ========== PREPROCESSING ==========
+# ======= PREPROCESSING =======
 def cap_and_scale(df, cols):
     df = df.copy()
     for col in cols:
@@ -93,7 +91,6 @@ def cap_and_scale(df, cols):
     scaler = MinMaxScaler()
     df[cols] = scaler.fit_transform(df[cols])
     return df, scaler
-
 
 def prepare_multioutput_forecast_data(df, lag=5, horizon=5):
     if len(df) < lag + horizon:
@@ -114,18 +111,17 @@ def prepare_multioutput_forecast_data(df, lag=5, horizon=5):
     final = pd.concat([X, y], axis=1).dropna()
     return final[X.columns], final[y.columns]
 
-
-# ========== MAIN ==========
+# ======= MAIN =======
 if __name__ == "__main__":
     # 1️⃣ Collect new data
     df_new = collect_data_5days_every5hours()
 
-    # 2️⃣ Connect to Hopsworks (Feature Store)
-    project = hopsworks.login(project="aqi_karachi_final")  # ✅ Correct feature store name
+    # 2️⃣ Connect to Hopsworks
+    project = hopsworks.login(project=FEATURE_STORE_NAME)
     fs = project.get_feature_store()
     mr = project.get_model_registry()
 
-    # 3️⃣ Read old data (if exists)
+    # 3️⃣ Read old data from Feature Store (if exists)
     try:
         fg = fs.get_feature_group("karachi_weather_5h", version=1)
         df_old = fg.read()
@@ -134,40 +130,44 @@ if __name__ == "__main__":
         print("⚠️ No existing Feature Group found, creating new one.")
         df_old = pd.DataFrame()
 
-    # 4️⃣ Combine old + new
-    df_combined = pd.concat([df_old, df_new], ignore_index=True)\
-                    .drop_duplicates(subset=["timestamp"])\
-                    .sort_values("timestamp")
-    print(f"📦 Total combined records: {len(df_combined)}")
+    # 4️⃣ Ensure timestamps are datetime
+    if not df_old.empty:
+        df_old["timestamp"] = pd.to_datetime(df_old["timestamp"])
+    df_new["timestamp"] = pd.to_datetime(df_new["timestamp"])
 
-    # 5️⃣ Insert updated data into Feature Store
+    # 5️⃣ Combine old + new data
+    df_combined = pd.concat([df_old, df_new], ignore_index=True)
+    df_combined.drop_duplicates(subset=["timestamp"], inplace=True)
+    df_combined.sort_values("timestamp", inplace=True)
+    print(f"Total combined records: {len(df_combined)}")
+
+    # 6️⃣ Insert updated data into Feature Store
     fg = fs.get_or_create_feature_group(
         name="karachi_weather_5h",
         version=1,
-        description="5-hour interval weather and AQI data for Karachi",
+        description="5-hour interval weather and AQI for Karachi",
         primary_key=["timestamp"],
         event_time="timestamp"
     )
     fg.insert(df_combined)
-    print("✅ Updated data inserted into Feature Store successfully!")
+    print("✅ Updated data inserted into Feature Store")
 
-    # 6️⃣ Preprocess
+    # 7️⃣ Preprocess: outlier cap + scaling
     df_processed, scaler = cap_and_scale(df_combined, ["temperature", "humidity", "wind_speed", "pm2_5", "pm10", "aqi"])
 
-    # 7️⃣ Prepare lagged features & targets
+    # 8️⃣ Prepare lagged features & targets
     X, y = prepare_multioutput_forecast_data(df_processed, lag=5, horizon=5)
     if X is None or y is None:
-        print("❌ Not enough data to train.")
         sys.exit(1)
 
-    # 8️⃣ Split data
+    # 9️⃣ Split train/test
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
 
-    # 9️⃣ Train model
+    # 🔟 Train model
     rf_model = MultiOutputRegressor(RandomForestRegressor(random_state=42))
     rf_model.fit(X_train, y_train)
 
-    # 🔟 Evaluate
+    # 1️⃣1️⃣ Evaluate
     test_pred = rf_model.predict(X_test)
     rf_mae = mean_absolute_error(y_test, test_pred)
     rf_rmse = np.sqrt(mean_squared_error(y_test, test_pred))
@@ -175,9 +175,12 @@ if __name__ == "__main__":
     rf_acc = max(0, (1 - rf_rmse)) * 100
 
     print("\n=== Testing Performance ===")
-    print(f"MAE: {round(rf_mae, 4)} | RMSE: {round(rf_rmse, 4)} | R²: {round(rf_r2, 4)} | Accuracy: {round(rf_acc, 2)}%")
+    print("MAE:", round(rf_mae, 4),
+          "RMSE:", round(rf_rmse, 4),
+          "R²:", round(rf_r2, 4),
+          "Accuracy:", round(rf_acc, 2), "%")
 
-    # 1️⃣1️⃣ Save model to Hopsworks
+    # 1️⃣2️⃣ Save model to Hopsworks
     joblib.dump(rf_model, "rf_model.pkl", compress=3)
     input_example = X.iloc[0]
     model_schema = Schema(X)
@@ -192,7 +195,7 @@ if __name__ == "__main__":
         },
         model_schema=model_schema,
         input_example=input_example,
-        description="Random Forest retrained with historical + new 5-day data for Karachi AQI"
+        description="Random Forest retrained with historical + new 5-day data"
     )
     saved_model = model.save("rf_model.pkl")
     print(f"✅ Model saved to Hopsworks | R²: {round(rf_r2, 4)} | Accuracy: {round(rf_acc, 2)}%")
