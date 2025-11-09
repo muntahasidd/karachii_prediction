@@ -1,6 +1,6 @@
 hopsworks
 hopsworks==4.1.2
-#hopsworks[python]
+hopsworks[python]
 hsml
 pandas
 scikit-learn
