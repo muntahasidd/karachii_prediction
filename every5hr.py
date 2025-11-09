@@ -1,7 +1,3 @@
-# ========================================
-# Karachi Weather & AQI Forecast - 5-hour Interval, Combined Historical + Recent Data
-# ========================================
-
 import requests, pandas as pd, numpy as np, time, os, sys
 from datetime import datetime, timedelta
 import hopsworks, joblib
@@ -18,7 +14,7 @@ API_KEY = os.getenv("OPENWEATHER_API_KEY")
 LAT, LON = 24.8607, 67.0011
 CITY_ID = 1174872
 CSV_PATH = "karachi_weather_5h.csv"
-FEATURE_STORE_NAME = "aqi_karachi_final"
+FEATURE_STORE_NAME = "aqi_karachi_final"  # Correct feature store name
 
 # ======= FETCH FUNCTIONS =======
 def fetch_weather_at(ts):
@@ -50,7 +46,7 @@ def build_record(ts):
     pollution = fetch_pollution_at(ts)
     time.sleep(1)
     if not weather or not pollution:
-        print(f"⚠️ Skipped {ts}: incomplete data")
+        print(f"⚠ Skipped {ts}: incomplete data")
         return None
     comp = pollution["components"]
     return {
@@ -63,20 +59,18 @@ def build_record(ts):
         "wind_speed": weather["wind"]["speed"]
     }
 
-# ======= COLLECT NEW DATA =======
+# ======= COLLECT DATA =======
 def collect_data_5days_every5hours():
     start = datetime.now() - timedelta(days=5)
     end = datetime.now()
     current = start
     records = []
-
     while current < end:
         print(f"Fetching {current}")
         rec = build_record(current)
         if rec:
             records.append(rec)
         current += timedelta(hours=5)
-
     df_new = pd.DataFrame(records)
     print(f"✅ Collected {len(df_new)} new records.")
     return df_new
@@ -117,25 +111,25 @@ if __name__ == "__main__":
     df_new = collect_data_5days_every5hours()
 
     # 2️⃣ Connect to Hopsworks
-    project = hopsworks.login(project=FEATURE_STORE_NAME)
+    project = hopsworks.login()  # connect to your Hopsworks project
     fs = project.get_feature_store()
     mr = project.get_model_registry()
 
-    # 3️⃣ Read old data from Feature Store (if exists)
+    # 3️⃣ Read old data from Feature Store (if any)
     try:
         fg = fs.get_feature_group("karachi_weather_5h", version=1)
         df_old = fg.read()
         print(f"✅ Read {len(df_old)} old records from Feature Store.")
     except Exception as e:
-        print("⚠️ No existing Feature Group found, creating new one.")
+        print("⚠ No existing Feature Group found, creating new one.")
         df_old = pd.DataFrame()
 
-    # 4️⃣ Ensure timestamps are datetime
+    # 4️⃣ Make all timestamps tz-naive
     if not df_old.empty:
-        df_old["timestamp"] = pd.to_datetime(df_old["timestamp"])
-    df_new["timestamp"] = pd.to_datetime(df_new["timestamp"])
+        df_old["timestamp"] = pd.to_datetime(df_old["timestamp"]).dt.tz_localize(None)
+    df_new["timestamp"] = pd.to_datetime(df_new["timestamp"]).dt.tz_localize(None)
 
-    # 5️⃣ Combine old + new data
+    # 5️⃣ Combine old + new
     df_combined = pd.concat([df_old, df_new], ignore_index=True)
     df_combined.drop_duplicates(subset=["timestamp"], inplace=True)
     df_combined.sort_values("timestamp", inplace=True)
