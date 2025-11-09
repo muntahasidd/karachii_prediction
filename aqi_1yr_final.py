@@ -20,7 +20,7 @@ import os
 import numpy as np
 
 # ================= CONFIG =================
-API_KEY = "6094f98aa9ad646bfcbdd49788573e5b"  # OpenWeather API key
+API_KEY = os.getenv("OPENWEATHER_API_KEY") # OpenWeather API key
 LAT, LON = 24.8607, 67.0011  # Karachi coordinates
 CITY_ID = 1174872
 CSV_PATH = "karachi_weather_5h.csv"
