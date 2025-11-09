@@ -121,7 +121,7 @@ if __name__ == "__main__":
     df_new = collect_data_5days_every5hours()
 
     # 2️⃣ Connect to Hopsworks (Feature Store)
-    project = hopsworks.login(project="aqi_karachi_final_featurestore")  # ✅ Correct feature store name
+    project = hopsworks.login(project="aqi_karachi_final")  # ✅ Correct feature store name
     fs = project.get_feature_store()
     mr = project.get_model_registry()
 
